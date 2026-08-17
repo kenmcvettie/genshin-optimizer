@@ -26,6 +26,8 @@ export class GOSolver extends WorkerCoordinator<WorkerCommand, WorkerResult> {
   private topN: number
   private buildValues: { w: Worker; val: number }[]
   private finalizedResults: FinalizeResult[] = []
+  /** Kept so workers added mid-solve can be primed with the same state. */
+  private setupCommand!: WorkerCommand
 
   constructor(
     problem: OptProblemInput,
@@ -34,12 +36,7 @@ export class GOSolver extends WorkerCoordinator<WorkerCommand, WorkerResult> {
   ) {
     const workers = Array(numWorker)
       .fill(Number.NaN)
-      .map(
-        (_) =>
-          new Worker(new URL('./BackgroundWorker.ts', import.meta.url), {
-            type: 'module',
-          })
-      )
+      .map((_) => GOSolver.makeWorker())
     super(workers, ['iterate', 'split', 'count'], (r, w) => {
       switch (r.resultType) {
         case 'interim':
@@ -68,7 +65,28 @@ export class GOSolver extends WorkerCoordinator<WorkerCommand, WorkerResult> {
       val: Number.NEGATIVE_INFINITY,
     })
 
-    this.notifiedBroadcast(this.preprocess(problem))
+    this.setupCommand = this.preprocess(problem)
+    this.notifiedBroadcast(this.setupCommand)
+  }
+
+  private static makeWorker() {
+    return new Worker(new URL('./BackgroundWorker.ts', import.meta.url), {
+      type: 'module',
+    })
+  }
+
+  /**
+   * Raise the worker count to `target` (never lowers it).
+   *
+   * Called while solving when a concurrent optimization in another tab finishes:
+   * this run's share of the CPU has grown, so take it. Shrinking is deliberately
+   * not supported - a busy worker cannot be reclaimed mid-chunk, and a newly
+   * started run simply takes a smaller share for itself instead.
+   */
+  growTo(target: number) {
+    const add = Math.floor(target) - this.workerCount
+    if (add > 0) this.addWorkers(add, GOSolver.makeWorker, this.setupCommand)
+    return this.workerCount
   }
 
   async solve() {

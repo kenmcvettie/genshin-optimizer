@@ -59,7 +59,10 @@ import {
   statFilterToNumNode,
   useGlobalError,
   acquireOptimizerSlot,
+  countRunningOptimizations,
+  effectiveWorkersFor,
   useNumWorkers,
+  useOptimizerConcurrency,
   useTeamData,
 } from '@genshin-optimizer/gi/ui'
 import type { UIData } from '@genshin-optimizer/gi/uidata'
@@ -158,6 +161,15 @@ export default function TabBuild() {
   const generatingBuilds = buildStatus.type !== 'inactive'
 
   const [maxWorkers, nativeThreads, setMaxWorkers] = useNumWorkers()
+  // Live across tabs, so the thread count reflects what a run actually gets.
+  const optimizerConcurrency = useOptimizerConcurrency()
+  const sharedWorkers = generatingBuilds
+    ? // Already solving: this tab holds a lock and is therefore already counted,
+      // and `workers` tracks pool growth as other tabs finish.
+      (buildStatus.workers ??
+      effectiveWorkersFor(maxWorkers, Math.max(1, optimizerConcurrency)))
+    : // Not solving: a run started now would be one more than those in flight.
+      effectiveWorkersFor(maxWorkers, optimizerConcurrency + 1)
 
   // Clear state when changing characters
   if (usePrev(characterKey) !== characterKey) setBuildStatus(initBuildStatus())
@@ -386,6 +398,8 @@ export default function TabBuild() {
       testedPerSecond: 0,
       skippedPerSecond: 0,
       startTime: performance.now(),
+      workers: maxWorkers,
+      maxWorkers,
     }
     const statusUpdateTimer = setInterval(
       () => setBuildStatus({ type: 'active', ...status }),
@@ -398,9 +412,21 @@ export default function TabBuild() {
     // it. Released in the `finally` below.
     const { effectiveWorkers, release: releaseOptLock } =
       await acquireOptimizerSlot(maxWorkers)
+    status.workers = effectiveWorkers
+    let rebalanceTimer: ReturnType<typeof setInterval> | undefined
     try {
       const solver = new GOSolver(problem, status, effectiveWorkers)
       cancelled.then(() => solver.cancel(cancellationError))
+
+      // Reclaim CPU as other tabs finish. Without this a run started alongside
+      // another keeps its reduced share for its whole duration, leaving half the
+      // machine idle once the other one ends.
+      rebalanceTimer = setInterval(async () => {
+        const concurrent = Math.max(1, await countRunningOptimizations())
+        status.workers = solver.growTo(
+          effectiveWorkersFor(maxWorkers, concurrent)
+        )
+      }, 2000)
 
       const results = await solver.solve()
       solver.cancel() // Done using `solver`
@@ -482,6 +508,7 @@ export default function TabBuild() {
       status.skipped = 0
       status.total = 0
     } finally {
+      if (rebalanceTimer) clearInterval(rebalanceTimer)
       releaseOptLock()
       clearInterval(statusUpdateTimer)
       setBuildStatus({
@@ -708,9 +735,18 @@ export default function TabBuild() {
           disabled={generatingBuilds || !characterKey || !optimizationTarget}
           sx={{ borderRadius: '4px 0px 0px 4px' }}
           title={
-            <Trans t={t} i18nKey="thread" count={maxWorkers}>
-              {{ count: maxWorkers }} Threads
-            </Trans>
+            sharedWorkers < maxWorkers ? (
+              <span>
+                {sharedWorkers} /{' '}
+                <Trans t={t} i18nKey="thread" count={maxWorkers}>
+                  {{ count: maxWorkers }} Threads
+                </Trans>
+              </span>
+            ) : (
+              <Trans t={t} i18nKey="thread" count={maxWorkers}>
+                {{ count: maxWorkers }} Threads
+              </Trans>
+            )
           }
         >
           <MenuItem>
@@ -718,6 +754,13 @@ export default function TabBuild() {
               {t('threadDropdownDesc')}
             </Typography>
           </MenuItem>
+          {sharedWorkers < maxWorkers && (
+            <MenuItem>
+              <Typography variant="caption" color="warning.main">
+                {t('threadSharedDesc', { count: sharedWorkers })}
+              </Typography>
+            </MenuItem>
+          )}
           <Divider />
           {range(1, nativeThreads)
             .reverse()

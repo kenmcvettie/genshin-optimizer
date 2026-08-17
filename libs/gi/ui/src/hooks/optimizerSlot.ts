@@ -1,5 +1,72 @@
+import { useEffect, useState } from 'react'
+
 /** Web Lock held for the duration of an optimization, by every tab running one. */
 const OPTIMIZER_LOCK = 'go-optimizing'
+
+function locksApi() {
+  return typeof navigator === 'undefined' ? undefined : navigator.locks
+}
+
+/**
+ * How many optimizations are running right now, across every tab.
+ *
+ * Returns 0 when the Web Locks API is unavailable, so callers can treat a
+ * non-positive result as "assume we're alone".
+ */
+export async function countRunningOptimizations(): Promise<number> {
+  const locks = locksApi()
+  if (!locks?.query) return 0
+  try {
+    const { held } = await locks.query()
+    return (held ?? []).filter((lock) => lock.name === OPTIMIZER_LOCK).length
+  } catch {
+    // `query` is permission-gated in some browsers.
+    return 0
+  }
+}
+
+/**
+ * The user's configured worker count, divided by the number of tabs competing
+ * for the CPU.
+ *
+ * The configured value is never modified - only this derived per-run figure -
+ * because `useNumWorkers` persists its value, and writing a divided number back
+ * would permanently degrade the setting.
+ */
+export function effectiveWorkersFor(maxWorkers: number, concurrent: number) {
+  return Math.max(1, Math.floor(maxWorkers / Math.max(1, concurrent)))
+}
+
+/**
+ * Live count of concurrent optimizations, for display.
+ *
+ * Web Locks has no change event, so this polls. It only runs while the document
+ * is visible - a backgrounded tab has nothing to show.
+ */
+export function useOptimizerConcurrency(pollMs = 2000): number {
+  const [concurrent, setConcurrent] = useState(0)
+  useEffect(() => {
+    let cancelled = false
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const poll = async () => {
+      if (cancelled) return
+      if (!document.hidden) {
+        const n = await countRunningOptimizations()
+        if (!cancelled) setConcurrent(n)
+      }
+      timer = setTimeout(poll, pollMs)
+    }
+    poll()
+    const onVisible = () => !document.hidden && poll()
+    document.addEventListener('visibilitychange', onVisible)
+    return () => {
+      cancelled = true
+      if (timer) clearTimeout(timer)
+      document.removeEventListener('visibilitychange', onVisible)
+    }
+  }, [pollMs])
+  return concurrent
+}
 
 export interface OptimizerSlot {
   /** Worker count to actually use, after splitting the CPU between tabs. */
@@ -11,34 +78,23 @@ export interface OptimizerSlot {
 /**
  * Claim a share of the CPU for one optimization run.
  *
- * Now that several tabs can optimize at once, each spawning `hardwareConcurrency`
+ * Several tabs can optimize at once, and each spawning `hardwareConcurrency`
  * workers would oversubscribe the machine and make every run slower. Each tab
  * holds a *shared* lock while solving, so counting the holders gives the number
- * of concurrent optimizations to divide by.
- *
- * The user's configured worker count is never modified - only the per-run figure
- * derived from it - because `useNumWorkers` persists its value to localStorage
- * and writing a divided number back would permanently degrade the setting.
+ * of concurrent runs to divide by.
  */
 export async function acquireOptimizerSlot(
   maxWorkers: number
 ): Promise<OptimizerSlot> {
-  const locks = typeof navigator === 'undefined' ? undefined : navigator.locks
+  const locks = locksApi()
   if (!locks?.request)
     return { effectiveWorkers: maxWorkers, release: () => {} }
 
-  let concurrent = 1
-  try {
-    // Query before acquiring, so we don't count ourselves twice.
-    const { held } = await locks.query()
-    concurrent =
-      (held?.filter((lock) => lock.name === OPTIMIZER_LOCK).length ?? 0) + 1
-  } catch {
-    // `query` is permission-gated in some browsers; assume we're alone.
-  }
+  // Query before acquiring, so we don't count ourselves twice.
+  const concurrent = (await countRunningOptimizations()) + 1
 
   let release = () => {}
-  const acquired = new Promise<void>((resolve) => {
+  await new Promise<void>((resolve) => {
     locks
       .request(
         OPTIMIZER_LOCK,
@@ -52,10 +108,9 @@ export async function acquireOptimizerSlot(
       // A failed acquisition must not stall the solve.
       .catch(() => resolve())
   })
-  await acquired
 
   return {
-    effectiveWorkers: Math.max(1, Math.floor(maxWorkers / concurrent)),
+    effectiveWorkers: effectiveWorkersFor(maxWorkers, concurrent),
     release: () => release(),
   }
 }

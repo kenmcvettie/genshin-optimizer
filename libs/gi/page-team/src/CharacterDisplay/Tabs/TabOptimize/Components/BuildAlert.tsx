@@ -13,6 +13,10 @@ export type BuildStatus = {
   skippedPerSecond: number // number of configs skipped in the last second (none are tested)
   startTime?: number
   finishTime?: number
+  /** Threads actually in use; grows as concurrent runs in other tabs finish. */
+  workers?: number
+  /** Threads the user configured, for contrast when the two differ. */
+  maxWorkers?: number
 }
 
 const Monospace = styled('strong')({
@@ -34,6 +38,8 @@ export default function BuildAlert({
     skippedPerSecond,
     startTime,
     finishTime,
+    workers,
+    maxWorkers,
   },
   characterName,
 }: {
@@ -88,6 +94,17 @@ export default function BuildAlert({
     </Monospace>
   )
 
+  // Only worth mentioning when it differs from what the user asked for -
+  // otherwise it is noise. This is the spot where "why is this slow?" gets asked.
+  const throttled = !!workers && !!maxWorkers && workers < maxWorkers
+  const threadText = throttled && (
+    <span>
+      {' | '}
+      <Monospace>{workers}</Monospace> of <Monospace>{maxWorkers}</Monospace>{' '}
+      threads (shared with another tab)
+    </span>
+  )
+
   const color = 'success' as 'success' | 'warning' | 'error'
   let title = '' as ReactNode
   let subtitle = '' as ReactNode
@@ -105,7 +122,7 @@ export default function BuildAlert({
     subtitle = (
       <Typography>
         Time elapsed: {durationString} | {testedPerSecondString} builds tested
-        (+{skippedPerSecondString} skipped) per second
+        (+{skippedPerSecondString} skipped) per second{threadText}
       </Typography>
     )
   } else if (tested + skipped) {
@@ -120,6 +137,7 @@ export default function BuildAlert({
       <Typography>
         Total duration: {durationString} | Average {avgTestedPerSecondString}{' '}
         builds tested (+{avgSkippedPerSecondString} skipped) per second
+        {threadText}
       </Typography>
     )
   } else {

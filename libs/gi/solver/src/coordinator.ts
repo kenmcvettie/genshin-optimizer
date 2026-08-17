@@ -32,7 +32,40 @@ export class WorkerCoordinator<
     this.workers = workers.map((w) => Promise.resolve(w))
     this.cancel = () => {}
     this.cancelled = new Promise<never>((_, rej) => (this.cancel = rej))
-    this.cancelled.catch((_) => workers.forEach((w) => w.terminate()))
+    // `this._workers`, not the constructor argument: workers added later by
+    // `addWorkers` must be terminated on cancel too, or they outlive the solve.
+    this.cancelled.catch((_) => this._workers.forEach((w) => w.terminate()))
+  }
+
+  get workerCount() {
+    return this._workers.length
+  }
+
+  /**
+   * Add workers to a pool that is already running.
+   *
+   * Used to reclaim CPU when a concurrent optimization in another tab finishes.
+   * `setup` is replayed to each new worker so it starts from the same state the
+   * original pool was primed with.
+   *
+   * Growth is not instantaneous: if `execute` is already parked waiting on the
+   * current workers, it only re-races the pool after one of them reports back,
+   * so a new worker picks up work at the next chunk boundary.
+   */
+  addWorkers(count: number, makeWorker: () => Worker, setup?: Command) {
+    for (let i = 0; i < count; i++) {
+      const worker = makeWorker()
+      worker.onmessage = (x) => this.onMessage(x.data, worker)
+      worker.onerror = (e) => this.onError(e)
+      this._workers.push(worker)
+      if (setup) {
+        this.workers.push(
+          new Promise((res) => this.workDone.set(worker, () => res(worker)))
+        )
+        worker.postMessage(setup)
+      } else this.workers.push(Promise.resolve(worker))
+    }
+    if (count > 0) this.notifyNonEmpty?.()
   }
 
   /**
