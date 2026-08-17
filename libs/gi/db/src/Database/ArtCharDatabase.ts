@@ -90,7 +90,13 @@ export class ArtCharDatabase extends Database {
     this.displayArchive = new DisplayArchiveEntry(this)
 
     // invalidates character when things change.
-    const updateLastEdit = () => this.dbMeta.set({ lastEdit: Date.now() })
+    // Skipped during a rebuild: those changes were authored by another tab, which
+    // already stamped `lastEdit` itself. Without this, replaying a rebuild would
+    // queue one `dbMeta` write per restored record.
+    const updateLastEdit = () => {
+      if (this.isRebuilding) return
+      this.dbMeta.set({ lastEdit: Date.now() })
+    }
 
     // IMPORTANT: do not follow changes made to dbMeta,
     // as it would end in infinite loop
@@ -220,13 +226,77 @@ export class ArtCharDatabase extends Database {
     this.saveStorage()
     other.saveStorage()
   }
-  toExtraLocalDB() {
-    const key = `extraDatabase_${this.storage.getDBIndex()}`
+  /** The whole database as the single JSON blob an inactive slot is stored as. */
+  serializeExtra(): string {
     const other = new SandboxStorage()
     const oldstorage = this.storage
     this.storage = other
     this.saveStorage()
     this.storage = oldstorage
-    localStorage.setItem(key, JSON.stringify(Object.fromEntries(other.entries)))
+    return JSON.stringify(Object.fromEntries(other.entries))
+  }
+  toExtraLocalDB() {
+    const key = `extraDatabase_${this.storage.getDBIndex()}`
+    localStorage.setItem(key, this.serializeExtra())
+  }
+
+  /** Storage keys owned by this database, for cross-tab sync. */
+  static readonly syncKeys = {
+    prefixes: [
+      'artifact_',
+      'char_',
+      'weapon_',
+      'build_',
+      'buildTc_',
+      'optConfig_',
+      'charMeta_',
+      'generatedBuildList_',
+      'team_',
+      'teamchar_',
+    ],
+    exact: ['db_ver'],
+  } as const
+  get syncKeys() {
+    return ArtCharDatabase.syncKeys
+  }
+
+  /**
+   * Re-read the whole database from storage, after another tab changed it.
+   *
+   * This deliberately rebuilds everything rather than patching the changed key.
+   * `ArtifactDataManager.toCache` is not a pure decoder - it re-derives character
+   * equipment relations from the *local* previous value - so applying one remote
+   * record in isolation can leave this tab's cache disagreeing with storage.
+   * Replaying the constructor's order reproduces boot semantics exactly, which is
+   * the only state we know to be self-consistent.
+   *
+   * Mutates in place: `generateBuilds` holds this instance across a long run, and
+   * every `useSyncExternalStore` subscription is bound to these manager objects.
+   */
+  reloadFromStorage() {
+    this.withRebuild(() => {
+      this.dbVer = this.storage.getDBVersion()
+      // Clear every cache BEFORE scanning any of them. `CharacterDataManager`
+      // rebuilds `equippedArtifacts`/`equippedWeapon` by searching the artifact
+      // and weapon caches, so scanning characters while those still hold the
+      // previous state would resurrect equipment the other tab just moved.
+      // Emptying everything first reproduces the constructor's starting point.
+      this.dataManagers.forEach((dm) => dm.resetCache())
+      // IMPORTANT: same order as the constructor. Cannot reuse `dataManagers`,
+      // which omits `ensureEquipments` and orders generatedBuildList/optConfigs
+      // only incidentally.
+      this.chars.scanStorage()
+      this.weapons.scanStorage()
+      this.arts.scanStorage()
+      this.weapons.ensureEquipments()
+      this.generatedBuildList.scanStorage()
+      this.optConfigs.scanStorage()
+      this.buildTcs.scanStorage()
+      this.charMeta.scanStorage()
+      this.builds.scanStorage()
+      this.teamChars.scanStorage()
+      this.teams.scanStorage()
+      this.dataEntries.forEach((de) => de.reload())
+    })
   }
 }

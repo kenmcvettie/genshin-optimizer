@@ -132,6 +132,9 @@ export class OptConfigDataManager extends DataManager<
 > {
   constructor(database: ArtCharDatabase) {
     super(database, 'optConfigs')
+    this.loadFromStorage()
+  }
+  override scanStorage() {
     for (const key of this.database.storage.keys)
       if (key.startsWith('optConfig_') && !this.set(key, {}))
         this.database.storage.remove(key)
@@ -174,13 +177,19 @@ export class OptConfigDataManager extends DataManager<
     )
       generatedBuildListId = undefined
 
-    // Business logic: don't allow 2 opt configs to have the same build list
+    // Business logic: don't allow 2 opt configs to have the same build list.
+    // Confirm the rival claim against storage too - a cache entry left stale by
+    // another tab's write must not strip a build list we just legitimately saved.
+    // The storage read only runs for an entry that already collides in-cache, so
+    // in practice this stays O(n); it is not a per-entry lookup.
     if (
       generatedBuildListId &&
       this.entries.some(
         ([otherKey, otherConfig]) =>
           key !== otherKey &&
-          otherConfig.generatedBuildListId === generatedBuildListId
+          otherConfig.generatedBuildListId === generatedBuildListId &&
+          this.getStorage(otherKey)?.generatedBuildListId ===
+            generatedBuildListId
       )
     )
       generatedBuildListId = undefined
@@ -238,7 +247,11 @@ export class OptConfigDataManager extends DataManager<
     return id
   }
   newOrSetGeneratedBuildList(optConfigId: string, list: GeneratedBuildList) {
-    const optConfig = this.get(optConfigId)
+    // Read through storage, not the cache. An optimization runs for minutes, so
+    // by the time it saves, another tab may already have attached a build list to
+    // this optConfig. Trusting a stale cache would mint a second list and orphan
+    // the first forever - nothing ever removes generatedBuildList entries.
+    const optConfig = this.getStorage(optConfigId)
 
     if (!optConfig) {
       console.warn(`OptConfig not found for ID: ${optConfigId}`)
@@ -247,7 +260,7 @@ export class OptConfigDataManager extends DataManager<
 
     const listId = optConfig.generatedBuildListId
     const generatedBuildList =
-      listId && this.database.generatedBuildList.get(listId)
+      listId && this.database.generatedBuildList.getStorage(listId)
 
     if (listId && generatedBuildList) {
       return this.database.generatedBuildList.set(listId, list)

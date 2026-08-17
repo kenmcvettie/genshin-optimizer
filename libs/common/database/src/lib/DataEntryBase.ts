@@ -82,8 +82,14 @@ export class DataEntryBase<
   setCached(cached: CacheValue) {
     deepFreeze(cached)
     this.data = cached
-    this.database.storage.set(this.toStorageKey(), this.deCache(cached))
+    // See DataManagerBase.saveStorageEntry - never echo writes during a rebuild.
+    if (!this.database.isRebuilding)
+      this.database.storage.set(this.toStorageKey(), this.deCache(cached))
     this.trigger('update', cached)
+  }
+  /** Re-read this entry from storage, falling back to its initial value. */
+  reload() {
+    this.set(this.getStorage() ?? this.init(this.database))
   }
   clear() {
     const data = this.toCache(this.init(this.database))
@@ -100,7 +106,10 @@ export class DataEntryBase<
   }
 
   trigger(reason: TriggerString, object?: unknown) {
-    this.listeners.forEach((cb) => cb(reason, object as CacheValue))
+    const fire = () =>
+      this.listeners.forEach((cb) => cb(reason, object as CacheValue))
+    if (this.database.isRebuilding) this.database.deferTrigger(fire)
+    else fire()
   }
   follow(callback: Callback<CacheValue>) {
     this.listeners.push(callback)

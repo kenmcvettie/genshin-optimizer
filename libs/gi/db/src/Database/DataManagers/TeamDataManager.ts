@@ -74,6 +74,11 @@ export class TeamDataManager extends DataManager<
 > {
   constructor(database: ArtCharDatabase) {
     super(database, 'teams')
+    this.loadFromStorage()
+  }
+  override scanStorage() {
+    // NOTE: `team_` and `teamchar_` stay disjoint only because of the trailing
+    // underscore - do not drop it.
     for (const key of this.database.storage.keys)
       if (key.startsWith('team_') && !this.set(key, {}))
         this.database.storage.remove(key)

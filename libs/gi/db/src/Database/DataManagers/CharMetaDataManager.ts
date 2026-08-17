@@ -30,6 +30,9 @@ export class CharMetaDataManager extends DataManager<
 > {
   constructor(database: ArtCharDatabase) {
     super(database, 'charMetas')
+    this.loadFromStorage()
+  }
+  override scanStorage() {
     for (const key of this.database.storage.keys)
       if (
         key.startsWith(storageHash) &&

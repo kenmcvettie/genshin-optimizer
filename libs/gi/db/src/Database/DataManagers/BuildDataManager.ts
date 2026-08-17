@@ -46,6 +46,9 @@ export class BuildDataManager extends DataManager<
 > {
   constructor(database: ArtCharDatabase) {
     super(database, 'builds')
+    this.loadFromStorage()
+  }
+  override scanStorage() {
     for (const key of this.database.storage.keys)
       if (key.startsWith('build_') && !this.set(key, {}))
         this.database.storage.remove(key)

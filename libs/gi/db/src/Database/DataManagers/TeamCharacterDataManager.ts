@@ -63,9 +63,7 @@ export class TeamCharacterDataManager extends DataManager<
 > {
   constructor(database: ArtCharDatabase) {
     super(database, 'teamchars')
-    for (const key of this.database.storage.keys)
-      if (key.startsWith('teamchar_') && !this.set(key, {}))
-        this.database.storage.remove(key)
+    this.loadFromStorage()
 
     // Since this and optConfig have a 1:1 relationship, validate whether there are any orphaned optConfigs
     // const optConfigKeys = new Set(this.database.optConfigs.keys)
@@ -73,6 +71,11 @@ export class TeamCharacterDataManager extends DataManager<
     // Array.from(optConfigKeys).forEach((optConfigId) =>
     //   this.database.optConfigs.remove(optConfigId)
     // )
+  }
+  override scanStorage() {
+    for (const key of this.database.storage.keys)
+      if (key.startsWith('teamchar_') && !this.set(key, {}))
+        this.database.storage.remove(key)
   }
   newName(characterKey: CharacterKey) {
     const existingUndercKey = this.values.filter(

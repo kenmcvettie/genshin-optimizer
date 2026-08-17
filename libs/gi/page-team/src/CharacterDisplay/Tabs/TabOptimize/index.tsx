@@ -58,6 +58,7 @@ import {
   resolveInfo,
   statFilterToNumNode,
   useGlobalError,
+  acquireOptimizerSlot,
   useNumWorkers,
   useTeamData,
 } from '@genshin-optimizer/gi/ui'
@@ -314,6 +315,12 @@ export default function TabBuild() {
       allowPartial
     )
 
+    // Snapshot id -> slot up front. A solve can run for minutes, and another tab
+    // may edit or delete artifacts in the meantime; reading `database.arts` when
+    // the results are saved would then silently drop slots. This also matches the
+    // artifact set the solver was actually given.
+    const slotOf = new Map(filteredArts.map((art) => [art.id, art.slotKey]))
+
     const teamData = getTeamData(
       database,
       teamId,
@@ -386,8 +393,13 @@ export default function TabBuild() {
     )
 
     const cancellationError = new Error()
+    // Hold a shared lock for the duration of the solve so other tabs can see how
+    // many optimizations are running and split the CPU instead of oversubscribing
+    // it. Released in the `finally` below.
+    const { effectiveWorkers, release: releaseOptLock } =
+      await acquireOptimizerSlot(maxWorkers)
     try {
-      const solver = new GOSolver(problem, status, maxWorkers)
+      const solver = new GOSolver(problem, status, effectiveWorkers)
       cancelled.then(() => solver.cancel(cancellationError))
 
       const results = await solver.solve()
@@ -418,9 +430,7 @@ export default function TabBuild() {
             .filter(notEmpty)
             .map(({ value, plot, artifactIds }) => ({
               artifactIds: objKeyMap(allArtifactSlotKeys, (slotKey) =>
-                artifactIds.find(
-                  (aId) => database.arts.get(aId)?.slotKey === slotKey
-                )
+                artifactIds.find((aId) => slotOf.get(aId) === slotKey)
               ),
               weaponId,
               value,
@@ -438,9 +448,7 @@ export default function TabBuild() {
       database.optConfigs.newOrSetGeneratedBuildList(optConfigId, {
         builds: builds.map((build) => ({
           artifactIds: objKeyMap(allArtifactSlotKeys, (slotKey) =>
-            build.artifactIds.find(
-              (aId) => database.arts.get(aId)?.slotKey === slotKey
-            )
+            build.artifactIds.find((aId) => slotOf.get(aId) === slotKey)
           ),
           weaponId,
         })),
@@ -474,6 +482,7 @@ export default function TabBuild() {
       status.skipped = 0
       status.total = 0
     } finally {
+      releaseOptLock()
       clearInterval(statusUpdateTimer)
       setBuildStatus({
         type: 'inactive',

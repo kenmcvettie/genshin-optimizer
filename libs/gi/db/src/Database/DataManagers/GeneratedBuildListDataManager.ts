@@ -25,6 +25,9 @@ export class GeneratedBuildListDataManager extends DataManager<
 > {
   constructor(database: ArtCharDatabase) {
     super(database, 'generatedBuildList')
+    this.loadFromStorage()
+  }
+  override scanStorage() {
     for (const key of this.database.storage.keys)
       if (key.startsWith('generatedBuildList_') && !this.set(key, {}))
         this.database.storage.remove(key)

@@ -32,6 +32,9 @@ export class WeaponDataManager extends DataManager<
 > {
   constructor(database: ArtCharDatabase) {
     super(database, 'weapons')
+    this.loadFromStorage()
+  }
+  override scanStorage() {
     for (const key of this.database.storage.keys)
       if (key.startsWith('weapon_') && !this.set(key, {}))
         this.database.storage.remove(key)

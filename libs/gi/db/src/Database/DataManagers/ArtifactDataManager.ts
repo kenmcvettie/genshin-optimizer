@@ -59,6 +59,9 @@ export class ArtifactDataManager extends DataManager<
 > {
   constructor(database: ArtCharDatabase) {
     super(database, 'artifacts')
+    this.loadFromStorage()
+  }
+  override scanStorage() {
     for (const key of this.database.storage.keys)
       if (key.startsWith('artifact_') && !this.set(key, {}))
         this.database.storage.remove(key)

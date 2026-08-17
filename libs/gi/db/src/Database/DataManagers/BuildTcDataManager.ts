@@ -201,9 +201,12 @@ export class BuildTcDataManager extends DataManager<
 > {
   constructor(database: ArtCharDatabase) {
     super(database, 'buildTcs')
+    this.loadFromStorage()
+  }
+  override scanStorage() {
     for (const key of this.database.storage.keys) {
       if (key.startsWith('buildTc_') && !this.set(key, {}))
-        database.storage.remove(key)
+        this.database.storage.remove(key)
     }
   }
   override validate(obj: unknown): BuildTc | undefined {

@@ -36,6 +36,9 @@ export class CharacterDataManager extends DataManager<
 > {
   constructor(database: ArtCharDatabase) {
     super(database, 'characters')
+    this.loadFromStorage()
+  }
+  override scanStorage() {
     for (const key of this.database.storage.keys) {
       if (
         key.startsWith('char_') &&

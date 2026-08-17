@@ -30,6 +30,43 @@ export class DataManagerBase<
   toCacheKey(key: string): CacheKey {
     return key as CacheKey
   }
+  /**
+   * Populate the cache by scanning storage. Subclasses override this with the
+   * prefix scan that used to live inline in their constructors.
+   *
+   * Callers rebuilding a whole database must `resetCache()` *every* manager
+   * before scanning any of them - see {@link resetCache}.
+   */
+  scanStorage(): void {
+    // no entries by default
+  }
+  /**
+   * Drop the cache without re-reading it.
+   *
+   * Split from the scan because `toCache` implementations may read *sibling*
+   * managers (a character derives `equippedArtifacts` from the artifact cache).
+   * Resetting and scanning one manager at a time would let a not-yet-rebuilt
+   * sibling's stale entries leak into the new cache.
+   */
+  resetCache(): void {
+    this.data = {}
+    // `trigger` only clears these for new/remove/update, and a rebuild's triggers
+    // are deferred - so drop them up front rather than relying on that.
+    this.cachedKeys = undefined
+    this.cachedValues = undefined
+    this.cachedEntries = undefined
+  }
+  /**
+   * Discard the cache and re-scan it from storage.
+   *
+   * Only safe for a lone manager, or inside `database.withRebuild`, which
+   * suppresses the storage writes the scan's normalization would otherwise echo
+   * back to other tabs.
+   */
+  loadFromStorage(): void {
+    this.resetCache()
+    this.scanStorage()
+  }
   validate(obj: unknown, _key: CacheKey): StorageValue | undefined {
     return obj as StorageValue
   }
@@ -125,6 +162,9 @@ export class DataManagerBase<
   }
   /** Trigger update event */
   trigger(key: CacheKey, reason: TriggerString, object?: any) {
+    // Invalidate memoized views eagerly, even mid-rebuild: a rebuild is one
+    // synchronous block, so nothing can read them before it finishes, and
+    // deferring would leave `useSyncExternalStore` holding a stale snapshot.
     if (reason === 'new' || reason === 'remove') {
       this.cachedKeys = undefined
       this.cachedValues = undefined
@@ -134,8 +174,12 @@ export class DataManagerBase<
       this.cachedValues = undefined
       this.cachedEntries = undefined
     }
-    this.listeners[key]?.forEach((cb) => cb(key, reason, object))
-    this.anyListeners.forEach((cb) => cb(key, reason, object))
+    const fire = () => {
+      this.listeners[key]?.forEach((cb) => cb(key, reason, object))
+      this.anyListeners.forEach((cb) => cb(key, reason, object))
+    }
+    if (this.database.isRebuilding) this.database.deferTrigger(fire)
+    else fire()
   }
   remove(key: CacheKey, notify = true) {
     const rem = this.data[key]
@@ -177,7 +221,14 @@ export class DataManagerBase<
     let candidate = ''
     do {
       candidate = `${this.goKeySingle}_${ind++}`
-    } while (keys.has(candidate))
+    } while (
+      keys.has(candidate) ||
+      // Another tab may have claimed this id without our cache knowing. Probe via
+      // `getString`, not `get` - `get` parses and *deletes* keys it can't parse.
+      this.database.storage.getString(
+        this.toStorageKey(candidate as CacheKey)
+      ) !== undefined
+    )
     return candidate
   }
 
@@ -187,9 +238,13 @@ export class DataManagerBase<
     }
   }
   removeStorageEntry(key: CacheKey) {
+    // During a rebuild the other tab owns storage; echoing writes back would
+    // ping-pong between tabs and can undo what that tab just decided.
+    if (this.database.isRebuilding) return
     this.database.storage.remove(this.toStorageKey(key))
   }
   saveStorageEntry(key: CacheKey, cached: CacheValue) {
+    if (this.database.isRebuilding) return
     this.database.storage.set(this.toStorageKey(key), this.deCache(cached))
   }
   clearStorage() {

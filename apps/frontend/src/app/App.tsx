@@ -1,4 +1,5 @@
 import {
+  attachTabSync,
   DBLocalStorage,
   SandboxStorage,
 } from '@genshin-optimizer/common/database'
@@ -24,7 +25,14 @@ import {
   useTheme,
 } from '@mui/material'
 import type { ComponentType } from 'react'
-import { lazy, Suspense, useCallback, useMemo, useState } from 'react'
+import {
+  lazy,
+  Suspense,
+  useCallback,
+  useEffect,
+  useMemo,
+  useState,
+} from 'react'
 import { HashRouter, Route, Routes } from 'react-router-dom'
 import './App.scss'
 import {
@@ -104,34 +112,65 @@ const PageTeam = lazy(
     }>
 )
 
-function App() {
-  const dbIndex = Number.parseInt(localStorage.getItem('dbIndex') || '1')
-  const [databases, setDatabases] = useState(() => {
-    localStorage.removeItem('GONewTabDetection')
-    localStorage.setItem('GONewTabDetection', 'debug')
-    return ([1, 2, 3, 4] as const).map((index) => {
-      if (index === dbIndex) {
-        return new ArtCharDatabase(index, new DBLocalStorage(localStorage))
-      } else {
-        const dbName = `extraDatabase_${index}`
-        const eDB = localStorage.getItem(dbName)
-        const dbObj = eDB ? JSON.parse(eDB) : {}
-        const db = new ArtCharDatabase(index, new SandboxStorage(dbObj))
-        db.toExtraLocalDB()
-        return db
-      }
-    })
+function readDbIndex() {
+  return Number.parseInt(localStorage.getItem('dbIndex') || '1')
+}
+
+function bootstrapDatabases(dbIndex: number) {
+  return ([1, 2, 3, 4] as const).map((index) => {
+    if (index === dbIndex)
+      return new ArtCharDatabase(index, new DBLocalStorage(localStorage))
+
+    const dbName = `extraDatabase_${index}`
+    const eDB = localStorage.getItem(dbName)
+    const dbObj = eDB ? JSON.parse(eDB) : {}
+    const db = new ArtCharDatabase(index, new SandboxStorage(dbObj))
+    // Only write back when boot normalization actually changed something.
+    // Rewriting unconditionally meant every new tab stomped all three inactive
+    // slots with its own snapshot, resurrecting data another tab had swapped away.
+    if (eDB === null || db.serializeExtra() !== eDB) db.toExtraLocalDB()
+    return db
   })
+}
+
+function App() {
+  const [dbIndex, setDbIndex] = useState(readDbIndex)
+  const [databases, setDatabases] = useState(() => bootstrapDatabases(dbIndex))
   const setDatabase = useCallback(
     (index: number, db: ArtCharDatabase) => {
       const dbs = [...databases]
       dbs[index] = db
       setDatabases(dbs)
+      // A slot swap or database replace performed *in this tab* rewrites
+      // `dbIndex`, and `storage` events never fire in the writing tab - so
+      // re-read it here or this tab keeps rendering the old active slot.
+      setDbIndex(readDbIndex())
     },
     [databases, setDatabases]
   )
 
   const database = databases[dbIndex - 1]
+
+  // Keep this tab's cache in step with edits made in other tabs.
+  useEffect(
+    () =>
+      attachTabSync(database, {
+        slotKey: 'dbIndex',
+        // A slot switch changes *which* database is active, so re-reading the
+        // current one would be wrong - the whole 4-slot bootstrap has to re-run.
+        // KNOWN GAP: a solve running in *this* tab still holds the old database,
+        // whose storage now addresses a different slot, so its results would land
+        // in the wrong database. Detecting that needs the local `buildStatus` from
+        // TabOptimize; the real fix is an exclusive lock around slot switching so
+        // it cannot happen while any tab is optimizing.
+        onSlotChange: () => {
+          const next = readDbIndex()
+          setDbIndex(next)
+          setDatabases(bootstrapDatabases(next))
+        },
+      }),
+    [database]
+  )
   const dbContextObj = useMemo(
     () => ({ databases, setDatabases, database, setDatabase }),
     [databases, setDatabases, database, setDatabase]
