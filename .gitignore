@@ -74,3 +74,5 @@ vitest.config.*.timestamp*
 
 # local Claude Code instructions
 CLAUDE.md
+
+DB_exports/
