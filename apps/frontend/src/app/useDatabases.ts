@@ -1,6 +1,7 @@
 import {
   attachTabSync,
   DBLocalStorage,
+  loadJsonOrB64GzipFromStorage,
   SandboxStorage,
 } from '@genshin-optimizer/common/database'
 import { ArtCharDatabase } from '@genshin-optimizer/gi/db'
@@ -17,13 +18,24 @@ export function bootstrapDatabases(dbIndex: number) {
       return new ArtCharDatabase(index, new DBLocalStorage(localStorage))
 
     const dbName = `extraDatabase_${index}`
-    const eDB = localStorage.getItem(dbName)
-    const dbObj = eDB ? JSON.parse(eDB) : {}
+    const raw = localStorage.getItem(dbName)
+    const dbObj = loadJsonOrB64GzipFromStorage(dbName)
     const db = new ArtCharDatabase(index, new SandboxStorage(dbObj))
     // Only write back when boot normalization actually changed something.
     // Rewriting unconditionally meant every new tab stomped all three inactive
     // slots with its own snapshot, resurrecting data another tab had swapped away.
-    if (eDB === null || db.serializeExtra() !== eDB) db.toExtraLocalDB()
+    //
+    // The one write we do allow on unchanged content is the plain-JSON ->
+    // b64-gzip migration: re-encoding identical content resurrects nothing, and
+    // skipping it would leave the slot uncompressed forever. Compressed slots
+    // start with the gzip magic in base64 ("H4sI"), never with "{".
+    const isUncompressed = raw !== null && raw.startsWith('{')
+    if (
+      raw === null ||
+      isUncompressed ||
+      db.serializeExtra() !== JSON.stringify(dbObj)
+    )
+      db.toExtraLocalDB()
     return db
   })
 }

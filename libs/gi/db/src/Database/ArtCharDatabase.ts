@@ -1,5 +1,6 @@
 import type { DBStorage } from '@genshin-optimizer/common/database'
 import { Database, SandboxStorage } from '@genshin-optimizer/common/database'
+import { compressToB64Gzip } from '@genshin-optimizer/common/util'
 import type { GenderKey } from '@genshin-optimizer/gi/consts'
 import type { IGOOD } from '@genshin-optimizer/gi/good'
 import { DBMetaEntry } from './DataEntries/DBMetaEntry'
@@ -164,7 +165,8 @@ export class ArtCharDatabase extends Database {
   }
   importGOOD(
     good: IGOOD & IGO,
-    keepNotInImport: boolean,
+    keepWepArtiNotInImport: boolean,
+    keepCharNotInImport: boolean,
     ignoreDups: boolean
   ): ImportResult {
     good = migrateGOOD(good)
@@ -178,7 +180,8 @@ export class ArtCharDatabase extends Database {
     }
     const result: ImportResult = newImportResult(
       source,
-      keepNotInImport,
+      keepWepArtiNotInImport,
+      keepCharNotInImport,
       ignoreDups
     )
 
@@ -226,18 +229,32 @@ export class ArtCharDatabase extends Database {
     this.saveStorage()
     other.saveStorage()
   }
-  /** The whole database as the single JSON blob an inactive slot is stored as. */
-  serializeExtra(): string {
+  /**
+   * The whole database as the plain object an inactive slot is stored as.
+   */
+  private extraEntries(): Record<string, unknown> {
     const other = new SandboxStorage()
     const oldstorage = this.storage
     this.storage = other
     this.saveStorage()
     this.storage = oldstorage
-    return JSON.stringify(Object.fromEntries(other.entries))
+    return Object.fromEntries(other.entries)
   }
-  toExtraLocalDB() {
+
+  /**
+   * Deterministic plain-JSON form of the whole database.
+   *
+   * Only used to decide whether an inactive slot actually needs rewriting.
+   * `compressToB64Gzip` stamps the current mtime into the gzip header, so its
+   * output differs between calls on identical input and cannot be compared.
+   */
+  serializeExtra(): string {
+    return JSON.stringify(this.extraEntries())
+  }
+
+  override toExtraLocalDB() {
     const key = `extraDatabase_${this.storage.getDBIndex()}`
-    localStorage.setItem(key, this.serializeExtra())
+    localStorage.setItem(key, compressToB64Gzip(this.extraEntries()))
   }
 
   /** Storage keys owned by this database, for cross-tab sync. */
