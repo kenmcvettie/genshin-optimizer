@@ -71,3 +71,6 @@ vitest.config.*.timestamp*
 
 .nx/polygraph
 .nx/self-healing
+
+# local Claude Code instructions
+CLAUDE.md
