@@ -1,3 +1,4 @@
+import { loadJsonOrB64GzipFromStorage } from '@genshin-optimizer/common/database'
 import { act, renderHook } from '@testing-library/react'
 import { bootstrapDatabases, useDatabases } from './useDatabases'
 
@@ -147,5 +148,49 @@ describe('bootstrapDatabases', () => {
 
     expect(writes.filter((k) => k.startsWith('extraDatabase_'))).toEqual([])
     expect(localStorage.getItem('extraDatabase_2')).toBe(snapshot)
+  })
+
+  // Slots written before #3284 are plain JSON. They have to be re-encoded or
+  // they stay uncompressed forever - but only ONCE. Rewriting on every boot is
+  // the clobber this function exists to avoid, and it would come back silently
+  // if `serializeExtra()` and the decoded stored object ever disagreed.
+  it('migrates a plain-JSON slot to b64-gzip exactly once', () => {
+    bootstrapDatabases(1)
+    const asStored = localStorage.getItem('extraDatabase_2')
+    expect(asStored?.startsWith('H4sI')).toBe(true)
+    const content = JSON.stringify(
+      loadJsonOrB64GzipFromStorage('extraDatabase_2')
+    )
+
+    // Rewind the slot to the pre-#3284 encoding.
+    localStorage.setItem('extraDatabase_2', content)
+    bootstrapDatabases(1)
+
+    const migrated = localStorage.getItem('extraDatabase_2')
+    expect(migrated?.startsWith('H4sI')).toBe(true)
+    // Re-encoding must be lossless - this is a format change, not an edit.
+    expect(JSON.stringify(loadJsonOrB64GzipFromStorage('extraDatabase_2'))).toBe(
+      content
+    )
+
+    // ...and the next boot must leave it alone. `compressToB64Gzip` embeds the
+    // current mtime, so this only holds because the comparison is done on the
+    // deterministic plain-JSON form, never on the compressed bytes.
+    const writes: string[] = []
+    const realSetItem = Storage.prototype.setItem
+    vi.spyOn(Storage.prototype, 'setItem').mockImplementation(function (
+      this: Storage,
+      k: string,
+      v: string
+    ) {
+      writes.push(k)
+      return realSetItem.call(this, k, v)
+    })
+    try {
+      bootstrapDatabases(1)
+    } finally {
+      vi.restoreAllMocks()
+    }
+    expect(writes.filter((k) => k.startsWith('extraDatabase_'))).toEqual([])
   })
 })
