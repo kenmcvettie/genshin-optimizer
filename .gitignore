@@ -76,3 +76,4 @@ vitest.config.*.timestamp*
 CLAUDE.md
 
 DB_exports/
+genshin_export_*.json
