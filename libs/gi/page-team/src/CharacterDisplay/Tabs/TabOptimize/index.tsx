@@ -337,17 +337,14 @@ export default function TabBuild() {
     // Filter with the latest settings rather than the deferred `filteredArts`,
     // so that a build started right after a settings change does not use an
     // outdated artifact pool. (#1120)
-    const split = compactArtifacts(
-      getFilteredArts(buildSetting),
-      mainStatAssumptionLevel,
-      allowPartial
-    )
+    const arts = getFilteredArts(buildSetting)
+    const split = compactArtifacts(arts, mainStatAssumptionLevel, allowPartial)
 
     // Snapshot id -> slot up front. A solve can run for minutes, and another tab
     // may edit or delete artifacts in the meantime; reading `database.arts` when
-    // the results are saved would then silently drop slots. This also matches the
-    // artifact set the solver was actually given.
-    const slotOf = new Map(filteredArts.map((art) => [art.id, art.slotKey]))
+    // the results are saved would then silently drop slots. Built from the same
+    // pool the solver is given, so every result id resolves to a slot.
+    const slotOf = new Map(arts.map((art) => [art.id, art.slotKey]))
 
     const teamData = getTeamData(
       database,
