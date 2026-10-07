@@ -1237,22 +1237,6 @@
       "key": "DMG Rockcore Meltdown"
     }
   },
-  "page_newTab": {
-    "title": "🛑Tab Optimizer Baru Terdeteksi🛑",
-    "p1": "Sepertinya kamu sudah membuka Genshin Optimizer di tab lain💞.  GO tidak dimaksudkan untuk beroperasi pada banyak tab📵, hal itu dapat mengakibatkan:",
-    "symptom": {
-      "1": "Data antar tab tidak Sinkron🙃.",
-      "2": "Database corruption💔.",
-      "3": "Sakit perut🤰 dan Genshin Optimizer Devs yang frustrasi😡.",
-      "4": "Dalam kasus yang jarang terjadi, MATI☠️."
-    },
-    "p2": "Kami telah mencegah hal ini terjadi dengan menampilkan pesan ini📝 kepadamu. Kamu sekarang memiliki pilihan:",
-    "choice": {
-      "1": "Tutup tab ini🔪, dan gunakan tab baru🆕.",
-      "2": "Tutup tab baru↩️, dan setelah kamu yakin ini adalah satu-satunya tab🔂, kamu dapat merefresh halaman ini🔄."
-    },
-    "refresh": "Refresh Halaman"
-  },
   "char_Candace": {
     "hydroInfusion": "<hydro>Sword, Claymore danPolearm Hydro Infusion</hydro>"
   },
